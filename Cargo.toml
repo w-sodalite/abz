@@ -1,0 +1,40 @@
+[package]
+name = "abz"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+license-file = "LICENSE"
+authors = ["w-sodalite@hotmail.com"]
+readme = "README.md"
+repository = "https://github.com/w-sodalite/abz.git"
+description = "批量将`zip压缩包`和`tar.gz压缩包`相互转换的小工具。"
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced.git", branch = "master", features = ["sipper", "tokio"] }
+tokio = { version = "1.46", features = ["time", "sync", "macros", "rt-multi-thread"] }
+lucide-rs = { git = "https://github.com/w-sodalite/lucide-rs.git", branch = "main", features = ["data", "iced"] }
+anyhow = "1.0"
+rfd = "0.15"
+human_bytes = "0.4"
+zip = "2.1"
+flate2 = "1.0"
+tar = "0.4"
+sevenz-rust2 = { version = "0.17", optional = true }
+
+[features]
+7z = ["sevenz-rust2"]
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+strip = true
+
+[workspace.metadata.release]
+registry = "crates-io"
+shared-version = true
+consolidate-commits = true
+pre-release-commit-message = "Release {{version}}"
+tag-name = "v{{version}}"
+allow-branch = ["main"]
+dependent-version = "fix"
