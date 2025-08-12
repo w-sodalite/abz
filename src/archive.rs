@@ -45,7 +45,7 @@ impl Archive {
         }
     }
 
-    pub fn view(&self, index: usize) -> Element<Message> {
+    pub fn view(&self, index: usize) -> Element<'_, Message> {
         let base = container(
             row![
                 iced::widget::column![

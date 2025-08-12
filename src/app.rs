@@ -8,12 +8,13 @@ use iced::border::Radius;
 use iced::task::sipper;
 use iced::widget::{
     Column, Space, center, column, container, opaque, pick_list, row, scrollable, stack, text,
+    toggler,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Settings, Task, Theme, Vector, application};
 use lucide_rs::Lucide;
 use rfd::AsyncFileDialog;
-use std::fs::read_dir;
-use std::path::PathBuf;
+use std::fs::{DirEntry, read_dir};
+use std::path::{Path, PathBuf};
 use tokio::spawn;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::spawn_blocking;
@@ -25,6 +26,7 @@ const NOTO_SANS_SC: Font = Font::with_name("Noto Sans SC");
 #[derive(Debug, Clone)]
 pub enum Message {
     UpdateFormat(Format),
+    UpdateRecursion(bool),
     PickFiles,
     PickFolder,
     SelectArchives(Vec<Archive>),
@@ -37,11 +39,22 @@ pub enum Message {
     Error(String),
 }
 
-#[derive(Default)]
 pub struct App {
     format: Format,
     archives: Vec<Archive>,
     loading: bool,
+    recursion: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            format: Default::default(),
+            archives: vec![],
+            loading: false,
+            recursion: true,
+        }
+    }
 }
 
 impl App {
@@ -79,14 +92,20 @@ impl App {
                 self.format = format;
                 Task::none()
             }
+            Message::UpdateRecursion(recursion) => {
+                self.recursion = recursion;
+                Task::none()
+            }
             Message::PickFiles => Task::perform(pick_files(), |result| match result {
                 Ok(archives) => Message::SelectArchives(archives),
                 Err(e) => Message::Error(e.to_string()),
             }),
-            Message::PickFolder => Task::perform(pick_folder(), |result| match result {
-                Ok(archives) => Message::SelectArchives(archives),
-                Err(e) => Message::Error(e.to_string()),
-            }),
+            Message::PickFolder => {
+                Task::perform(pick_folder(self.recursion), |result| match result {
+                    Ok(archives) => Message::SelectArchives(archives),
+                    Err(e) => Message::Error(e.to_string()),
+                })
+            }
             Message::SelectArchives(archives) => {
                 self.archives.extend(archives);
                 self.archives.sort_by_key(|archive| archive.status.clone());
@@ -180,7 +199,7 @@ impl App {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let controls = self.controls();
         let archives = self.archives();
         let main = column![controls, archives]
@@ -196,7 +215,7 @@ impl App {
             .into()
     }
 
-    fn controls(&self) -> Element<Message> {
+    fn controls(&self) -> Element<'_, Message> {
         let opens = row![
             icon_button(Lucide::File, "打开文件")
                 .width(Length::Fixed(100.))
@@ -212,6 +231,12 @@ impl App {
                 } else {
                     Some(Message::PickFolder)
                 }),
+            row![
+                text("递归目录: "),
+                toggler(self.recursion).on_toggle(Message::UpdateRecursion)
+            ]
+            .width(Length::Fixed(100.))
+            .align_y(Alignment::Center)
         ]
         .spacing(10)
         .align_y(Alignment::Center)
@@ -258,7 +283,7 @@ impl App {
         .into()
     }
 
-    fn archives(&self) -> Element<Message> {
+    fn archives(&self) -> Element<'_, Message> {
         if self.archives.is_empty() {
             center(text("未选中任何文件"))
         } else {
@@ -308,15 +333,15 @@ async fn pick_files() -> anyhow::Result<Vec<Archive>> {
         .map_err(|e| anyhow!(e))
 }
 
-async fn pick_folder() -> anyhow::Result<Vec<Archive>> {
+async fn pick_folder(recursion: bool) -> anyhow::Result<Vec<Archive>> {
     match AsyncFileDialog::default().pick_folder().await {
         None => Ok(vec![]),
         Some(folder) => {
-            let entries = read_dir(folder.path()).map_err(|e| anyhow!(e))?;
+            let entries = list_archive_entry(folder.path(), recursion)?;
             entries
                 .into_iter()
-                .try_fold(vec![], |mut items, entry| match entry {
-                    Ok(entry) => match Archive::parse(entry.path()) {
+                .try_fold(vec![], |mut items, entry| {
+                    match Archive::parse(entry.path()) {
                         Ok(file) => {
                             if let Some(file) = file {
                                 items.push(file);
@@ -324,11 +349,47 @@ async fn pick_folder() -> anyhow::Result<Vec<Archive>> {
                             Ok(items)
                         }
                         Err(e) => Err(e),
-                    },
-                    Err(e) => Err(e),
+                    }
                 })
                 .map_err(|e| anyhow!(e))
         }
+    }
+}
+
+fn list_archive_entry(folder: &Path, recursion: bool) -> anyhow::Result<Vec<DirEntry>> {
+    let entries = read_dir(folder).map_err(|e| anyhow!(e))?;
+    match recursion {
+        true => entries
+            .into_iter()
+            .try_fold(vec![], |mut dirs, entry| match entry {
+                Ok(entry) => match entry.file_type() {
+                    Ok(file_type) => {
+                        if file_type.is_dir() {
+                            match list_archive_entry(&entry.path(), recursion) {
+                                Ok(sub_dirs) => {
+                                    dirs.extend(sub_dirs);
+                                    Ok(dirs)
+                                }
+                                Err(e) => Err(anyhow!(e)),
+                            }
+                        } else {
+                            dirs.push(entry);
+                            Ok(dirs)
+                        }
+                    }
+                    Err(e) => Err(anyhow!(e)),
+                },
+                Err(e) => Err(anyhow!(e)),
+            }),
+        false => entries
+            .into_iter()
+            .try_fold(vec![], |mut entries, entry| match entry {
+                Ok(entry) => {
+                    entries.push(entry);
+                    Ok(entries)
+                }
+                Err(e) => Err(anyhow!(e)),
+            }),
     }
 }
 
